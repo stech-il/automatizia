@@ -4,7 +4,7 @@ import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
-import * as bcrypt from 'bcryptjs';
+import bcrypt from 'bcryptjs';
 import * as db from './src/db.js';
 import * as whatsapp from './src/whatsapp.js';
 import apiRouter from './src/api.js';
