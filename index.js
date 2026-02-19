@@ -56,7 +56,9 @@ const adminHtml = `
     .qr-box { background: #fff; padding: 24px; border-radius: 12px; display: inline-block; margin: 15px 0; text-align: center; border: 3px solid #25D366; }
     .qr-box h3 { color: #111; margin: 0 0 12px 0; }
     .qr-box p { color: #666; font-size: 14px; margin: 12px 0 0 0; }
-    #qr { display: block; }
+    #qr { display: block; min-width: 300px; min-height: 300px; }
+    #qr img { display: block; margin: 0 auto; width: 320px; height: 320px; cursor: pointer; }
+    .qr-open { margin-top: 12px; font-size: 13px; color: #25D366; }
     .site-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #333; }
     .code { font-family: monospace; background: #333; padding: 4px 8px; border-radius: 4px; }
     .logout { background: #444; color: #eee; }
@@ -80,9 +82,10 @@ const adminHtml = `
     <p id="waStatusText"></p>
     <div class="card qr-box" id="qrCard" style="display:none">
       <h3>📱 סרוק ברקוד לחיבור וואטסאפ</h3>
-      <p>פתח את אפליקציית וואטסאפ → הגדרות → מכשירים מקושרים → קישור מכשיר</p>
+      <p>פתח וואטסאפ → הגדרות → מכשירים מקושרים → קישור מכשיר</p>
       <div id="qr"></div>
-      <p>הברקוד יתחלף כל מספר שניות – סרוק מהר</p>
+      <p class="qr-open">💡 לחיצה על הברקוד תפתח אותו בחלון חדש לסריקה נוחה יותר</p>
+      <p>הברקוד מתחדש כל ~20 שניות – אם לא סרקת, יוצג ברקוד חדש</p>
     </div>
     <div class="card">
       <h3>הוסף אתר חדש</h3>
@@ -149,7 +152,11 @@ const adminHtml = `
       if (res.status === 401) return;
       const data = await res.json();
       if (data.connected) return;
-      if (data.qr) document.getElementById('qr').innerHTML = data.qr;
+      if (data.qr) {
+        window.currentQRData = data.qr;
+        const el = document.getElementById('qr');
+        el.innerHTML = '<img src="' + data.qr + '" alt="QR לחיבור וואטסאפ" title="לחץ להגדלה" onclick="openQRFullscreen()">';
+      }
     }
     async function addSite() {
       const phone = document.getElementById('managerPhone').value.trim();
@@ -167,6 +174,12 @@ const adminHtml = `
         document.getElementById('siteName').value = '';
         refreshStatus();
       } else document.getElementById('addResult').textContent = data.error || 'שגיאה';
+    }
+    function openQRFullscreen() {
+      const dataUrl = window.currentQRData;
+      if (!dataUrl) return;
+      const w = window.open('', '_blank', 'width=500,height=550');
+      if (w) w.document.write('<html dir="rtl"><head><meta charset="UTF-8"><title>סריקת ברקוד</title></head><body style="margin:0;padding:20px;text-align:center;background:#fff;font-family:Arial"><h3>סרוק עם וואטסאפ</h3><img src="' + dataUrl + '" style="width:400px;height:400px"><p>וואטסאפ - הגדרות - מכשירים מקושרים - קישור מכשיר</p></body></html>');
     }
     (async function init() {
       const t = localStorage.getItem('adminToken');

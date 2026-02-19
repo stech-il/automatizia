@@ -72,15 +72,15 @@ router.post('/sites', requireAuth, (req, res) => {
   res.json({ success: true, site });
 });
 
-// Get QR for WhatsApp (returns SVG)
+// Get QR for WhatsApp (returns PNG data URL - better for scanning)
 router.get('/qr', requireAuth, async (req, res) => {
   if (whatsapp.getConnectionStatus().connected) {
     return res.json({ connected: true, qr: null });
   }
   if (currentQR) {
     try {
-      const svg = await QRCode.toString(currentQR, { type: 'svg' });
-      return res.json({ connected: false, qr: svg });
+      const dataUrl = await QRCode.toDataURL(currentQR, { width: 400, margin: 2, color: { dark: '#000', light: '#fff' } });
+      return res.json({ connected: false, qr: dataUrl });
     } catch (e) {
       return res.json({ connected: false, qr: null });
     }
