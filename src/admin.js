@@ -1,5 +1,6 @@
 import express from 'express';
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 import * as db from './db.js';
 import * as whatsapp from './whatsapp.js';
 import QRCode from 'qrcode';
@@ -12,14 +13,20 @@ export function setCurrentQR(qr) {
   currentQR = qr;
 }
 
+function getToken(req) {
+  const auth = req.headers.authorization || '';
+  return auth.startsWith('Bearer ') ? auth.slice(7) : req.query.token || '';
+}
+
 function requireAuth(req, res, next) {
-  if (req.session?.admin) {
+  const token = getToken(req);
+  if (token && db.isValidToken(token)) {
     return next();
   }
   res.status(401).json({ error: 'Authentication required' });
 }
 
-// Login
+// Login - returns token (no cookies/session)
 router.post('/login', async (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) {
@@ -29,13 +36,15 @@ router.post('/login', async (req, res) => {
   if (!admin || !(await bcrypt.compare(password, admin.password_hash))) {
     return res.status(401).json({ error: 'Invalid credentials' });
   }
-  req.session.admin = { username };
-  res.json({ success: true });
+  const token = crypto.randomBytes(32).toString('hex');
+  db.createToken(token);
+  res.json({ success: true, token });
 });
 
-// Logout
+// Logout - invalidate token
 router.post('/logout', (req, res) => {
-  req.session.destroy();
+  const token = getToken(req);
+  if (token) db.deleteToken(token);
   res.json({ success: true });
 });
 

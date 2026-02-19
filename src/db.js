@@ -48,6 +48,11 @@ db.exec(`
     password_hash TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS admin_tokens (
+    token TEXT PRIMARY KEY,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
   CREATE INDEX IF NOT EXISTS idx_sites_code ON sites(code);
   CREATE INDEX IF NOT EXISTS idx_conversations_site ON conversations(site_id);
 `);
@@ -114,6 +119,18 @@ export function createAdminUser(username, passwordHash) {
 
 export function getAdminByUsername(username) {
   return db.prepare('SELECT * FROM admin_users WHERE username = ?').get(username);
+}
+
+export function createToken(token) {
+  db.prepare('INSERT INTO admin_tokens (token) VALUES (?)').run(token);
+}
+
+export function isValidToken(token) {
+  return db.prepare('SELECT 1 FROM admin_tokens WHERE token = ?').get(token);
+}
+
+export function deleteToken(token) {
+  db.prepare('DELETE FROM admin_tokens WHERE token = ?').run(token);
 }
 
 function generateCode() {

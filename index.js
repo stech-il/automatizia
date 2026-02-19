@@ -1,5 +1,4 @@
 import express from 'express';
-import session from 'express-session';
 import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -30,17 +29,6 @@ const app = express();
 app.set('trust proxy', 1);
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
-app.use(session({
-  secret: process.env.SESSION_SECRET || 'change-me-in-production',
-  resave: true,
-  saveUninitialized: false,
-  cookie: {
-    secure: true,
-    httpOnly: true,
-    sameSite: 'lax',
-    maxAge: 24 * 60 * 60 * 1000,
-  },
-}));
 
 app.use('/api', apiRouter);
 app.use('/admin', adminRouter);
@@ -65,8 +53,10 @@ const adminHtml = `
     button:hover { opacity: 0.9; }
     .error { color: #f44; }
     .success { color: #25D366; }
-    #qr { background: #fff; padding: 20px; border-radius: 12px; display: inline-block; margin: 15px 0; }
-    #qr img, #qr svg { display: block; }
+    .qr-box { background: #fff; padding: 24px; border-radius: 12px; display: inline-block; margin: 15px 0; text-align: center; border: 3px solid #25D366; }
+    .qr-box h3 { color: #111; margin: 0 0 12px 0; }
+    .qr-box p { color: #666; font-size: 14px; margin: 12px 0 0 0; }
+    #qr { display: block; }
     .site-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #333; }
     .code { font-family: monospace; background: #333; padding: 4px 8px; border-radius: 4px; }
     .logout { background: #444; color: #eee; }
@@ -88,9 +78,11 @@ const adminHtml = `
   <div class="container" id="dashboard" style="display:none">
     <h1>ניהול צ'אט וואטסאפ <span class="status" id="waStatus"></span></h1>
     <p id="waStatusText"></p>
-    <div class="card" id="qrCard" style="display:none">
-      <h3>סרוק ברקוד להתחברות</h3>
+    <div class="card qr-box" id="qrCard" style="display:none">
+      <h3>📱 סרוק ברקוד לחיבור וואטסאפ</h3>
+      <p>פתח את אפליקציית וואטסאפ → הגדרות → מכשירים מקושרים → קישור מכשיר</p>
       <div id="qr"></div>
+      <p>הברקוד יתחלף כל מספר שניות – סרוק מהר</p>
     </div>
     <div class="card">
       <h3>הוסף אתר חדש</h3>
@@ -108,20 +100,26 @@ const adminHtml = `
   <script>
     const API = '/admin';
     let statusInterval, qrInterval;
+    function getHeaders() {
+      const t = localStorage.getItem('adminToken');
+      return t ? { 'Authorization': 'Bearer ' + t } : {};
+    }
     async function login() {
       document.getElementById('loginError').textContent = '';
       const res = await fetch(API + '/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ username: document.getElementById('username').value, password: document.getElementById('password').value })
       });
       const data = await res.json().catch(() => ({}));
-      if (data.success) loadDashboard();
-      else document.getElementById('loginError').textContent = data.error || 'שגיאה';
+      if (data.success) {
+        localStorage.setItem('adminToken', data.token);
+        loadDashboard();
+      } else document.getElementById('loginError').textContent = data.error || 'שגיאה';
     }
     function logout() {
-      fetch(API + '/logout', { method: 'POST', credentials: 'include' });
+      fetch(API + '/logout', { method: 'POST', headers: getHeaders() });
+      localStorage.removeItem('adminToken');
       clearInterval(statusInterval);
       clearInterval(qrInterval);
       document.getElementById('loginForm').style.display = 'block';
@@ -136,7 +134,7 @@ const adminHtml = `
       qrInterval = setInterval(refreshQR, 3000);
     }
     async function refreshStatus() {
-      const res = await fetch(API + '/status', { credentials: 'include' });
+      const res = await fetch(API + '/status', { headers: getHeaders() });
       if (res.status === 401) { logout(); return; }
       const data = await res.json();
       document.getElementById('waStatus').className = 'status ' + (data.whatsapp.connected ? 'connected' : 'disconnected');
@@ -147,7 +145,7 @@ const adminHtml = `
       ).join('') || '<p>אין אתרים</p>';
     }
     async function refreshQR() {
-      const res = await fetch(API + '/qr', { credentials: 'include' });
+      const res = await fetch(API + '/qr', { headers: getHeaders() });
       if (res.status === 401) return;
       const data = await res.json();
       if (data.connected) return;
@@ -159,8 +157,7 @@ const adminHtml = `
       if (!phone) { document.getElementById('addResult').textContent = 'הזן מספר טלפון'; return; }
       const res = await fetch(API + '/sites', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', ...getHeaders() },
         body: JSON.stringify({ manager_phone: phone, site_name: name })
       });
       const data = await res.json();
@@ -172,7 +169,9 @@ const adminHtml = `
       } else document.getElementById('addResult').textContent = data.error || 'שגיאה';
     }
     (async function init() {
-      const res = await fetch(API + '/status', { credentials: 'include' });
+      const t = localStorage.getItem('adminToken');
+      if (!t) return;
+      const res = await fetch(API + '/status', { headers: { 'Authorization': 'Bearer ' + t } });
       if (res.status === 200) loadDashboard();
     })();
   </script>
