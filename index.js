@@ -27,13 +27,19 @@ if (!admin) {
 }
 
 const app = express();
+app.set('trust proxy', 1);
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 app.use(session({
   secret: process.env.SESSION_SECRET || 'change-me-in-production',
-  resave: false,
+  resave: true,
   saveUninitialized: false,
-  cookie: { secure: process.env.NODE_ENV === 'production', httpOnly: true },
+  cookie: {
+    secure: true,
+    httpOnly: true,
+    sameSite: 'lax',
+    maxAge: 24 * 60 * 60 * 1000,
+  },
 }));
 
 app.use('/api', apiRouter);
@@ -101,7 +107,9 @@ const adminHtml = `
   </div>
   <script>
     const API = '/admin';
+    let statusInterval, qrInterval;
     async function login() {
+      document.getElementById('loginError').textContent = '';
       const res = await fetch(API + '/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -112,22 +120,24 @@ const adminHtml = `
       if (data.success) loadDashboard();
       else document.getElementById('loginError').textContent = data.error || 'שגיאה';
     }
-    async function logout() {
-      await fetch(API + '/logout', { method: 'POST', credentials: 'include' });
+    function logout() {
+      fetch(API + '/logout', { method: 'POST', credentials: 'include' });
+      clearInterval(statusInterval);
+      clearInterval(qrInterval);
       document.getElementById('loginForm').style.display = 'block';
       document.getElementById('dashboard').style.display = 'none';
     }
     async function loadDashboard() {
       document.getElementById('loginForm').style.display = 'none';
       document.getElementById('dashboard').style.display = 'block';
-      refreshStatus();
-      refreshQR();
-      setInterval(refreshStatus, 5000);
-      setInterval(refreshQR, 3000);
+      await refreshStatus();
+      await refreshQR();
+      statusInterval = setInterval(refreshStatus, 5000);
+      qrInterval = setInterval(refreshQR, 3000);
     }
     async function refreshStatus() {
       const res = await fetch(API + '/status', { credentials: 'include' });
-      if (res.status === 401) return logout();
+      if (res.status === 401) { logout(); return; }
       const data = await res.json();
       document.getElementById('waStatus').className = 'status ' + (data.whatsapp.connected ? 'connected' : 'disconnected');
       document.getElementById('waStatusText').textContent = data.whatsapp.connected ? 'וואטסאפ מחובר ✓' : 'וואטסאפ מנותק – סרוק ברקוד';
@@ -138,6 +148,7 @@ const adminHtml = `
     }
     async function refreshQR() {
       const res = await fetch(API + '/qr', { credentials: 'include' });
+      if (res.status === 401) return;
       const data = await res.json();
       if (data.connected) return;
       if (data.qr) document.getElementById('qr').innerHTML = data.qr;
@@ -160,11 +171,16 @@ const adminHtml = `
         refreshStatus();
       } else document.getElementById('addResult').textContent = data.error || 'שגיאה';
     }
+    (async function init() {
+      const res = await fetch(API + '/status', { credentials: 'include' });
+      if (res.status === 200) loadDashboard();
+    })();
   </script>
 </body>
 </html>
 `;
 
+app.get('/favicon.ico', (req, res) => res.status(204).end());
 app.get('/admin', (req, res) => {
   res.type('html').send(adminHtml);
 });
