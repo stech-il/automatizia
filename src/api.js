@@ -38,9 +38,14 @@ router.post('/message', async (req, res) => {
     const conv = db.getOrCreateConversation(site.id, visitor_id, visitor_name, visitor_phone);
     db.addMessage(conv.id, 'outgoing', message);
 
+    if (visitor_name || visitor_phone) {
+      db.addLead(site.id, conv.id, visitor_name || '', visitor_phone || '', message);
+    }
+
     const fullPhone = site.manager_phone.replace(/\D/g, '');
     lastConvByManager.set(fullPhone, conv.id);
     if (fullPhone.startsWith('972')) lastConvByManager.set(fullPhone.slice(3), conv.id);
+    db.setManagerLastConv(fullPhone, conv.id);
 
     const header = visitor_name || visitor_phone
       ? `[${site.site_name || site.code}] שם: ${visitor_name || '-'} | טלפון: ${visitor_phone || '-'}\n`
@@ -69,7 +74,10 @@ router.get('/messages', (req, res) => {
     return res.status(404).json({ error: 'Site not found' });
   }
 
-  const conv = db.getOrCreateConversation(site.id, visitor_id);
+  let conv = db.getLatestConversationByVisitor(site.id, visitor_id);
+  if (!conv) {
+    conv = db.getOrCreateConversation(site.id, visitor_id);
+  }
   let messages = db.getConversationMessages(conv.id);
 
   if (since) {
@@ -84,6 +92,7 @@ router.get('/messages', (req, res) => {
       content: m.content,
       created_at: m.created_at,
     })),
+    status: conv.status || 'active',
   });
 });
 

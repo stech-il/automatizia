@@ -55,8 +55,30 @@ db.exec(`
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 
+  CREATE TABLE IF NOT EXISTS manager_last_conv (
+    manager_phone TEXT PRIMARY KEY,
+    conversation_id INTEGER NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS leads (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    site_id INTEGER NOT NULL,
+    conversation_id INTEGER NOT NULL,
+    visitor_name TEXT,
+    visitor_phone TEXT,
+    message TEXT NOT NULL,
+    status TEXT DEFAULT 'new',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (site_id) REFERENCES sites(id),
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+  );
+
   CREATE INDEX IF NOT EXISTS idx_sites_code ON sites(code);
   CREATE INDEX IF NOT EXISTS idx_conversations_site ON conversations(site_id);
+  CREATE INDEX IF NOT EXISTS idx_leads_site ON leads(site_id);
+  CREATE INDEX IF NOT EXISTS idx_leads_created ON leads(created_at);
 `);
 
 try {
@@ -100,6 +122,29 @@ export function addMessage(conversationId, direction, content) {
     .run(conversationId, direction, content);
 }
 
+export function addLead(siteId, conversationId, visitorName, visitorPhone, message) {
+  db.prepare(
+    'INSERT INTO leads (site_id, conversation_id, visitor_name, visitor_phone, message) VALUES (?, ?, ?, ?, ?)'
+  ).run(siteId, conversationId, visitorName || null, visitorPhone || null, message || '');
+}
+
+export function getAllLeads(siteCode = null, limit = 500) {
+  if (siteCode) {
+    const site = db.prepare('SELECT id FROM sites WHERE code = ?').get(siteCode);
+    if (!site) return [];
+    return db.prepare(`
+      SELECT l.*, s.code as site_code, s.site_name 
+      FROM leads l JOIN sites s ON l.site_id = s.id 
+      WHERE l.site_id = ? ORDER BY l.created_at DESC LIMIT ?
+    `).all(site.id, limit);
+  }
+  return db.prepare(`
+    SELECT l.*, s.code as site_code, s.site_name 
+    FROM leads l JOIN sites s ON l.site_id = s.id 
+    ORDER BY l.created_at DESC LIMIT ?
+  `).all(limit);
+}
+
 export function getConversationMessages(conversationId) {
   return db.prepare('SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at')
     .all(conversationId);
@@ -115,8 +160,80 @@ export function getActiveConversationBySite(siteId) {
   ).get(siteId, 'active');
 }
 
+export function getLatestConversationByVisitor(siteId, visitorId) {
+  return db.prepare(
+    'SELECT * FROM conversations WHERE site_id = ? AND visitor_id = ? ORDER BY id DESC LIMIT 1'
+  ).get(siteId, visitorId);
+}
+
+export function getActiveConversationByVisitorPhone(visitorPhone) {
+  if (!visitorPhone) return null;
+  const phone = visitorPhone.replace(/\D/g, '');
+  const variants = [phone];
+  if (phone.startsWith('972')) variants.push(phone.slice(3));
+  else variants.push('972' + phone);
+  const all = db.prepare('SELECT * FROM conversations WHERE status = ? ORDER BY id DESC').all('active');
+  for (const c of all) {
+    const vp = (c.visitor_phone || '').replace(/\D/g, '');
+    if (!vp) continue;
+    for (const p of variants) {
+      if (vp === p || vp === (p.startsWith('972') ? p.slice(3) : '972' + p)) return c;
+    }
+  }
+  return null;
+}
+
 export function getConversationById(id) {
   return db.prepare('SELECT * FROM conversations WHERE id = ?').get(id);
+}
+
+export function setManagerLastConv(managerPhone, conversationId) {
+  const phone = managerPhone.replace(/\D/g, '');
+  db.prepare('INSERT OR REPLACE INTO manager_last_conv (manager_phone, conversation_id, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)')
+    .run(phone, conversationId);
+  if (phone.startsWith('972')) {
+    db.prepare('INSERT OR REPLACE INTO manager_last_conv (manager_phone, conversation_id, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)')
+      .run(phone.slice(3), conversationId);
+  }
+}
+
+export function closeConversation(conversationId) {
+  db.prepare('UPDATE conversations SET status = ? WHERE id = ?').run('closed', conversationId);
+}
+
+export function clearManagerLastConvForConversation(conversationId) {
+  db.prepare('DELETE FROM manager_last_conv WHERE conversation_id = ?').run(conversationId);
+}
+
+export function getStaleConversations(inactiveMinutes = 5) {
+  const cutoff = new Date(Date.now() - inactiveMinutes * 60 * 1000).toISOString();
+  const convs = db.prepare('SELECT id FROM conversations WHERE status = ?').all('active');
+  const stale = [];
+  for (const c of convs) {
+    const last = db.prepare(
+      'SELECT direction, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 1'
+    ).get(c.id);
+    if (!last) continue;
+    if (last.direction === 'incoming' && last.created_at < cutoff) {
+      stale.push(c);
+    }
+  }
+  return stale;
+}
+
+export function getManagerLastConv(managerPhone) {
+  const phone = managerPhone.replace(/\D/g, '');
+  if (!phone) return null;
+  const row = db.prepare('SELECT conversation_id FROM manager_last_conv WHERE manager_phone = ?').get(phone);
+  if (row) return row.conversation_id;
+  if (phone.startsWith('972')) {
+    const r2 = db.prepare('SELECT conversation_id FROM manager_last_conv WHERE manager_phone = ?').get(phone.slice(3));
+    if (r2) return r2.conversation_id;
+  } else {
+    const r3 = db.prepare('SELECT conversation_id FROM manager_last_conv WHERE manager_phone = ?').get('972' + phone);
+    if (r3) return r3.conversation_id;
+  }
+  return null;
 }
 
 export function createAdminUser(username, passwordHash) {

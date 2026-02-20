@@ -62,6 +62,14 @@ router.get('/status', requireAuth, (req, res) => {
   });
 });
 
+// Get leads
+router.get('/leads', requireAuth, (req, res) => {
+  const siteCode = req.query.site_code || null;
+  const limit = Math.min(parseInt(req.query.limit || '100', 10), 1000);
+  const leads = db.getAllLeads(siteCode, limit);
+  res.json({ leads });
+});
+
 // Create new site
 router.post('/sites', requireAuth, (req, res) => {
   const { manager_phone, site_name } = req.body;

@@ -16,14 +16,17 @@ const pendingReplies = new Map();
 
 function extractText(msg) {
   if (!msg) return null;
-  return msg.conversation
+  const t = msg.conversation
     || msg.extendedTextMessage?.text
     || msg.imageMessage?.caption
     || msg.videoMessage?.caption
     || msg.documentMessage?.caption
     || msg.buttonsResponseMessage?.selectedButtonId
     || msg.listResponseMessage?.title
-    || null;
+    || msg.listResponseMessage?.singleSelectReply?.selectedRowId
+    || msg.templateButtonReplyMessage?.selectedId
+    || (typeof msg === 'string' ? msg : null);
+  return t ? String(t).trim() || null : null;
 }
 
 export function getConnectionStatus() {
@@ -73,7 +76,6 @@ export async function connectWhatsApp(onQR, onReady, onDisconnect) {
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
     for (const m of messages) {
-      if (m.key.fromMe) continue;
       const msg = extractText(m.message);
       if (!msg) continue;
       const fromJid = m.key.remoteJid || '';
@@ -94,18 +96,38 @@ export async function connectWhatsApp(onQR, onReady, onDisconnect) {
         }
       }
       if (!convId) {
+        convId = db.getManagerLastConv(phoneRaw)
+          || db.getManagerLastConv(phoneVariants[1]);
+      }
+      if (!convId) {
         const sites = db.getAllSites();
         const site = sites.find(s => {
           const dbPhone = s.manager_phone.replace(/\D/g, '');
           return phoneVariants.some(p => dbPhone === p || dbPhone.endsWith(p) || p.endsWith(dbPhone));
         });
-        if (!site) continue;
-        const conv = db.getActiveConversationBySite(site.id);
-        if (!conv) continue;
-        convId = conv.id;
+        if (site) {
+          const conv = db.getActiveConversationBySite(site.id);
+          if (conv) convId = conv.id;
+        }
+      }
+      if (!convId && m.key.fromMe) {
+        const conv = db.getActiveConversationByVisitorPhone(phoneRaw);
+        if (conv) convId = conv.id;
+      }
+      if (!convId) {
+        if (process.env.DEBUG_WA) console.log('[WPWAC] No conv for message from', phoneRaw, 'fromMe:', m.key.fromMe);
+        continue;
       }
 
       db.addMessage(convId, 'incoming', msg);
+
+      const isClosePhrase = /הפניה\s*נסגרה\s*בהצלחה/.test(msg) || msg.includes('הפניה נסגרה בהצלחה');
+      if (isClosePhrase) {
+        console.log('[WPWAC] Closing conversation', convId, 'from', m.key.fromMe ? 'manager' : 'external');
+        db.closeConversation(convId);
+        db.clearManagerLastConvForConversation(convId);
+        for (const p of phoneVariants) lastConvByManager.delete(p);
+      }
 
       const pending = pendingReplies.get(phoneRaw) || pendingReplies.get(phoneVariants[1]);
       if (pending) {

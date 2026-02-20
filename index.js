@@ -6,6 +6,7 @@ import fs from 'fs';
 import bcrypt from 'bcryptjs';
 import * as db from './src/db.js';
 import * as whatsapp from './src/whatsapp.js';
+import { lastConvByManager } from './src/convMap.js';
 import apiRouter from './src/api.js';
 import adminRouter, { setCurrentQR } from './src/admin.js';
 import qrcode from 'qrcode-terminal';
@@ -91,6 +92,15 @@ const adminHtml = `
     <div class="card" id="connectedCard" style="display:none">
       <p>וואטסאפ מחובר. לסריקת ברקוד חדש: <button onclick="forceDisconnect()" class="logout">התנתק</button></p>
     </div>
+    <div class="card" id="leadsCard" style="border:1px solid #25D366">
+      <h3>📋 לידים</h3>
+      <p style="font-size:13px;color:#888;margin:-8px 0 10px 0">כל פנייה מהטופס נשמרת בשרת</p>
+      <select id="leadsSiteFilter" onchange="loadLeads()" style="margin-bottom:10px;padding:8px;background:#222;color:#eee;border:1px solid #333;border-radius:6px;width:100%">
+        <option value="">כל האתרים</option>
+      </select>
+      <div id="leadsList" style="max-height:250px;overflow-y:auto;font-size:14px;min-height:40px"></div>
+      <button onclick="exportLeadsCsv()" style="margin-top:10px;background:#25D366;color:#000;font-size:13px">📥 ייצוא ל-CSV</button>
+    </div>
     <div class="card">
       <h3>הוסף אתר חדש</h3>
       <input type="text" id="managerPhone" placeholder="מספר טלפון מנהל (לדוגמה 0501234567)">
@@ -151,6 +161,44 @@ const adminHtml = `
       document.getElementById('sitesList').innerHTML = data.sites.map(s => 
         '<div class="site-item"><span>' + (s.site_name || '-') + '</span><span class="code">' + s.code + '</span><span>' + s.manager_phone + '</span></div>'
       ).join('') || '<p>אין אתרים</p>';
+      const sel = document.getElementById('leadsSiteFilter');
+      if (sel) {
+        const cur = sel.value;
+        sel.innerHTML = '<option value="">כל האתרים</option>' + (data.sites.map(s => '<option value="' + s.code + '">' + (s.site_name || s.code) + '</option>').join(''));
+        sel.value = cur || '';
+      }
+      loadLeads();
+    }
+    let leadsCache = [];
+    async function loadLeads() {
+      const site = document.getElementById('leadsSiteFilter')?.value || '';
+      const res = await fetch(API + '/leads' + (site ? '?site_code=' + encodeURIComponent(site) : ''), { headers: getHeaders() });
+      if (res.status === 401) return;
+      const data = await res.json();
+      leadsCache = data.leads || [];
+      const el = document.getElementById('leadsList');
+      if (!el) return;
+      if (leadsCache.length === 0) el.innerHTML = '<p style="color:#888">אין לידים עדיין</p>';
+      else el.innerHTML = leadsCache.map(l => 
+        '<div class="site-item" style="border-bottom:1px solid #333;padding:10px 0;flex-direction:column;align-items:flex-start;gap:4px">' +
+        '<span><strong>' + (l.visitor_name || '-') + '</strong> | ' + (l.visitor_phone || '-') + ' | ' + (l.site_name || l.site_code) + '</span>' +
+        '<span style="color:#aaa;font-size:12px">' + l.message + '</span>' +
+        '<span style="color:#666;font-size:11px">' + l.created_at + '</span>' +
+        '</div>'
+      ).join('');
+    }
+    function exportLeadsCsv() {
+      if (leadsCache.length === 0) { alert('אין לידים לייצוא'); return; }
+      const headers = ['שם','טלפון','הודעה','אתר','תאריך'];
+      const rows = leadsCache.map(l => [
+        (l.visitor_name || '').replace(/"/g,'""'),
+        (l.visitor_phone || '').replace(/"/g,'""'),
+        (l.message || '').replace(/"/g,'""'),
+        (l.site_name || l.site_code || '').replace(/"/g,'""'),
+        l.created_at || ''
+      ].map(v => '"' + v + '"').join(','));
+      const csv = '\ufeff' + headers.map(h => '"' + h + '"').join(',') + '\n' + rows.join('\n');
+      const a = document.createElement('a'); a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv); a.download = 'leads_' + new Date().toISOString().slice(0,10) + '.csv'; a.click();
     }
     async function refreshQR() {
       const res = await fetch(API + '/qr', { headers: getHeaders() });
@@ -229,12 +277,40 @@ app.get('/admin', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
+const INACTIVE_MINUTES = parseInt(process.env.CHAT_INACTIVE_MINUTES || '5', 10);
+
+function runAutoCloseStaleChats() {
+  try {
+    const stale = db.getStaleConversations(INACTIVE_MINUTES);
+    for (const c of stale) {
+      const conv = db.getConversationById(c.id);
+      if (conv) {
+        const site = db.getAllSites().find(s => s.id === conv.site_id);
+        if (site) {
+          const mp = site.manager_phone.replace(/\D/g, '');
+          lastConvByManager.delete(mp);
+          if (mp.startsWith('972')) lastConvByManager.delete(mp.slice(3));
+        }
+      }
+      db.closeConversation(c.id);
+      db.clearManagerLastConvForConversation(c.id);
+    }
+    if (stale.length > 0) {
+      console.log('[WPWAC] Auto-closed', stale.length, 'inactive conversation(s)');
+    }
+  } catch (e) {
+    console.error('[WPWAC] Auto-close error:', e);
+  }
+}
 
 async function start() {
   app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
     console.log('Admin: http://localhost:' + PORT + '/admin');
+    console.log('Auto-close: chats close after', INACTIVE_MINUTES, 'min of no customer response');
   });
+
+  setInterval(runAutoCloseStaleChats, 60 * 1000);
 
   await whatsapp.connectWhatsApp(
     (qr) => {
