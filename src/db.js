@@ -28,6 +28,8 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     site_id INTEGER NOT NULL,
     visitor_id TEXT NOT NULL,
+    visitor_name TEXT,
+    visitor_phone TEXT,
     status TEXT DEFAULT 'active',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (site_id) REFERENCES sites(id)
@@ -57,6 +59,13 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_conversations_site ON conversations(site_id);
 `);
 
+try {
+  db.prepare('ALTER TABLE conversations ADD COLUMN visitor_name TEXT').run();
+} catch (e) {}
+try {
+  db.prepare('ALTER TABLE conversations ADD COLUMN visitor_phone TEXT').run();
+} catch (e) {}
+
 export function getSiteByCode(code) {
   return db.prepare('SELECT * FROM sites WHERE code = ?').get(code);
 }
@@ -68,17 +77,20 @@ export function createSite(managerPhone, siteName = '') {
   return { ...getSiteByCode(code) };
 }
 
-export function getOrCreateConversation(siteId, visitorId) {
+export function getOrCreateConversation(siteId, visitorId, visitorName = '', visitorPhone = '') {
   let conv = db.prepare(
     'SELECT * FROM conversations WHERE site_id = ? AND visitor_id = ? AND status = ?'
   ).get(siteId, visitorId, 'active');
 
   if (!conv) {
-    db.prepare('INSERT INTO conversations (site_id, visitor_id) VALUES (?, ?)')
-      .run(siteId, visitorId);
+    db.prepare('INSERT INTO conversations (site_id, visitor_id, visitor_name, visitor_phone) VALUES (?, ?, ?, ?)')
+      .run(siteId, visitorId, visitorName || null, visitorPhone || null);
     conv = db.prepare(
       'SELECT * FROM conversations WHERE site_id = ? AND visitor_id = ? ORDER BY id DESC'
     ).get(siteId, visitorId);
+  } else if (visitorName || visitorPhone) {
+    db.prepare('UPDATE conversations SET visitor_name = COALESCE(?, visitor_name), visitor_phone = COALESCE(?, visitor_phone) WHERE id = ?')
+      .run(visitorName || null, visitorPhone || null, conv.id);
   }
   return conv;
 }

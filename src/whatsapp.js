@@ -4,7 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import * as db from './db.js';
-import { lastConvByManager } from './convMap.js';
+import { lastConvByManager, msgIdToConv } from './convMap.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const authPath = path.join(process.env.DATA_DIR || path.join(__dirname, '..', 'data'), 'wa_auth');
@@ -74,9 +74,16 @@ export async function connectWhatsApp(onQR, onReady, onDisconnect) {
       const phoneVariants = [phoneRaw, phoneRaw.startsWith('972') ? phoneRaw.slice(3) : '972' + phoneRaw];
 
       let convId = null;
-      for (const p of phoneVariants) {
-        convId = lastConvByManager.get(p);
-        if (convId) break;
+      const quotedId = m.message?.extendedTextMessage?.contextInfo?.stanzaId
+        || m.message?.imageMessage?.contextInfo?.stanzaId
+        || m.message?.videoMessage?.contextInfo?.stanzaId
+        || m.message?.documentMessage?.contextInfo?.stanzaId;
+      if (quotedId) convId = msgIdToConv.get(quotedId);
+      if (!convId) {
+        for (const p of phoneVariants) {
+          convId = lastConvByManager.get(p);
+          if (convId) break;
+        }
       }
       if (!convId) {
         const sites = db.getAllSites();
@@ -123,7 +130,8 @@ export async function sendToManager(managerPhone, message, conversationId) {
     throw new Error('WhatsApp not connected');
   }
   const jid = managerPhone.includes('@') ? managerPhone : `${managerPhone.replace(/\D/g, '')}@s.whatsapp.net`;
-  await sock.sendMessage(jid, { text: message });
+  const sent = await sock.sendMessage(jid, { text: message });
+  return sent?.key?.id || null;
 }
 
 export function waitForReply(managerPhone, conversationId, timeoutMs = 300000) {

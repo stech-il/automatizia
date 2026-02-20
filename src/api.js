@@ -1,7 +1,7 @@
 import express from 'express';
 import * as db from './db.js';
 import * as whatsapp from './whatsapp.js';
-import { lastConvByManager } from './convMap.js';
+import { lastConvByManager, msgIdToConv } from './convMap.js';
 
 const router = express.Router();
 
@@ -21,7 +21,7 @@ router.get('/site/:code', (req, res) => {
 // Send message from chat widget
 router.post('/message', async (req, res) => {
   try {
-    const { site_code, visitor_id, message } = req.body;
+    const { site_code, visitor_id, message, visitor_name, visitor_phone } = req.body;
     if (!site_code || !visitor_id || !message) {
       return res.status(400).json({ error: 'Missing site_code, visitor_id or message' });
     }
@@ -35,15 +35,20 @@ router.post('/message', async (req, res) => {
       return res.status(503).json({ error: 'WhatsApp not connected. Please scan QR code in admin.' });
     }
 
-    const conv = db.getOrCreateConversation(site.id, visitor_id);
+    const conv = db.getOrCreateConversation(site.id, visitor_id, visitor_name, visitor_phone);
     db.addMessage(conv.id, 'outgoing', message);
 
     const fullPhone = site.manager_phone.replace(/\D/g, '');
     lastConvByManager.set(fullPhone, conv.id);
     if (fullPhone.startsWith('972')) lastConvByManager.set(fullPhone.slice(3), conv.id);
-    const textToSend = `[${site.site_name || site.code}] ${message}`;
+
+    const header = visitor_name || visitor_phone
+      ? `[${site.site_name || site.code}] שם: ${visitor_name || '-'} | טלפון: ${visitor_phone || '-'}\n`
+      : `[${site.site_name || site.code}] `;
+    const textToSend = header + message;
     const jidPhone = fullPhone.startsWith('972') ? fullPhone : `972${fullPhone}`;
-    await whatsapp.sendToManager(jidPhone, textToSend, conv.id);
+    const msgId = await whatsapp.sendToManager(jidPhone, textToSend, conv.id);
+    if (msgId) msgIdToConv.set(msgId, conv.id);
 
     res.json({ success: true, conversation_id: conv.id });
   } catch (err) {
