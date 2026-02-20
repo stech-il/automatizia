@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import * as db from './db.js';
+import { lastConvByManager } from './convMap.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const authPath = path.join(process.env.DATA_DIR || path.join(__dirname, '..', 'data'), 'wa_auth');
@@ -12,6 +13,18 @@ let sock = null;
 let isConnected = false;
 let connectCallbacks = null;
 const pendingReplies = new Map();
+
+function extractText(msg) {
+  if (!msg) return null;
+  return msg.conversation
+    || msg.extendedTextMessage?.text
+    || msg.imageMessage?.caption
+    || msg.videoMessage?.caption
+    || msg.documentMessage?.caption
+    || msg.buttonsResponseMessage?.selectedButtonId
+    || msg.listResponseMessage?.title
+    || null;
+}
 
 export function getConnectionStatus() {
   return { connected: isConnected };
@@ -49,31 +62,41 @@ export async function connectWhatsApp(onQR, onReady, onDisconnect) {
 
   sock.ev.on('creds.update', saveCreds);
 
-  sock.ev.on('messages.upsert', async ({ messages }) => {
+  sock.ev.on('messages.upsert', async ({ messages, type }) => {
+    if (type !== 'notify') return;
     for (const m of messages) {
       if (m.key.fromMe) continue;
-      const msg = m.message?.conversation || m.message?.extendedTextMessage?.text;
+      const msg = extractText(m.message);
       if (!msg) continue;
-      const fromJid = m.key.remoteJid;
-      const phone = fromJid.replace('@s.whatsapp.net', '');
+      const fromJid = m.key.remoteJid || '';
+      if (fromJid.endsWith('@g.us')) continue;
+      const phoneRaw = fromJid.replace('@s.whatsapp.net', '').replace(/\D/g, '');
+      const phoneVariants = [phoneRaw, phoneRaw.startsWith('972') ? phoneRaw.slice(3) : '972' + phoneRaw];
 
-      const sites = db.getAllSites();
-      const site = sites.find(s => {
-        const dbPhone = s.manager_phone.replace(/\D/g, '');
-        const incomingPhone = phone.replace(/\D/g, '');
-        return dbPhone === incomingPhone || dbPhone.endsWith(incomingPhone) || incomingPhone.endsWith(dbPhone);
-      });
-      if (!site) continue;
+      let convId = null;
+      for (const p of phoneVariants) {
+        convId = lastConvByManager.get(p);
+        if (convId) break;
+      }
+      if (!convId) {
+        const sites = db.getAllSites();
+        const site = sites.find(s => {
+          const dbPhone = s.manager_phone.replace(/\D/g, '');
+          return phoneVariants.some(p => dbPhone === p || dbPhone.endsWith(p) || p.endsWith(dbPhone));
+        });
+        if (!site) continue;
+        const conv = db.getActiveConversationBySite(site.id);
+        if (!conv) continue;
+        convId = conv.id;
+      }
 
-      const conv = db.getActiveConversationBySite(site.id);
-      if (!conv) continue;
+      db.addMessage(convId, 'incoming', msg);
 
-      db.addMessage(conv.id, 'incoming', msg);
-
-      const pending = pendingReplies.get(phone);
+      const pending = pendingReplies.get(phoneRaw) || pendingReplies.get(phoneVariants[1]);
       if (pending) {
-        pendingReplies.delete(phone);
-        pending.resolver({ conversationId: conv.id, message: msg });
+        pendingReplies.delete(phoneRaw);
+        pendingReplies.delete(phoneVariants[1]);
+        pending.resolver({ conversationId: convId, message: msg });
       }
     }
   });

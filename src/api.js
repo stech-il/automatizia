@@ -1,6 +1,7 @@
 import express from 'express';
 import * as db from './db.js';
 import * as whatsapp from './whatsapp.js';
+import { lastConvByManager } from './convMap.js';
 
 const router = express.Router();
 
@@ -37,10 +38,12 @@ router.post('/message', async (req, res) => {
     const conv = db.getOrCreateConversation(site.id, visitor_id);
     db.addMessage(conv.id, 'outgoing', message);
 
-    const phone = site.manager_phone.startsWith('972') ? site.manager_phone : `972${site.manager_phone}`;
-    const fullPhone = phone.replace(/\D/g, '');
+    const fullPhone = site.manager_phone.replace(/\D/g, '');
+    lastConvByManager.set(fullPhone, conv.id);
+    if (fullPhone.startsWith('972')) lastConvByManager.set(fullPhone.slice(3), conv.id);
     const textToSend = `[${site.site_name || site.code}] ${message}`;
-    await whatsapp.sendToManager(fullPhone, textToSend, conv.id);
+    const jidPhone = fullPhone.startsWith('972') ? fullPhone : `972${fullPhone}`;
+    await whatsapp.sendToManager(jidPhone, textToSend, conv.id);
 
     res.json({ success: true, conversation_id: conv.id });
   } catch (err) {
