@@ -1,4 +1,4 @@
-import makeWASocket, { useMultiFileAuthState, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
+import makeWASocket, { useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -56,7 +56,15 @@ export async function connectWhatsApp(onQR, onReady, onDisconnect) {
     }
     if (update.connection === 'close') {
       isConnected = false;
+      const statusCode = update.lastDisconnect?.error?.output?.statusCode;
       onDisconnect?.(update);
+      if (statusCode === DisconnectReason.loggedOut) return;
+      if (sock) {
+        try { sock.end(); } catch (e) {}
+        sock = null;
+      }
+      console.log('Reconnecting in 3s... (reason:', statusCode || 'unknown', ')');
+      setTimeout(() => connectWhatsApp(onQR, onReady, onDisconnect), 3000);
     }
   });
 
