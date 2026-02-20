@@ -57,7 +57,7 @@ const adminHtml = `
     .qr-box h3 { color: #111; margin: 0 0 12px 0; }
     .qr-box p { color: #666; font-size: 14px; margin: 12px 0 0 0; }
     #qr { display: block; min-width: 300px; min-height: 300px; }
-    #qr img { display: block; margin: 0 auto; width: 320px; height: 320px; cursor: pointer; }
+    #qr img, #qr svg { display: block; margin: 0 auto; width: 320px; height: 320px; cursor: pointer; }
     .qr-open { margin-top: 12px; font-size: 13px; color: #25D366; }
     .site-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #333; }
     .code { font-family: monospace; background: #333; padding: 4px 8px; border-radius: 4px; }
@@ -86,6 +86,10 @@ const adminHtml = `
       <div id="qr"></div>
       <p class="qr-open">💡 לחיצה על הברקוד תפתח אותו בחלון חדש לסריקה נוחה יותר</p>
       <p>הברקוד מתחדש כל ~20 שניות – אם לא סרקת, יוצג ברקוד חדש</p>
+      <button onclick="forceDisconnect()" style="margin-top:12px;background:#666">🔌 התנתק וסרוק ברקוד מחדש</button>
+    </div>
+    <div class="card" id="connectedCard" style="display:none">
+      <p>וואטסאפ מחובר. לסריקת ברקוד חדש: <button onclick="forceDisconnect()" class="logout">התנתק</button></p>
     </div>
     <div class="card">
       <h3>הוסף אתר חדש</h3>
@@ -143,6 +147,7 @@ const adminHtml = `
       document.getElementById('waStatus').className = 'status ' + (data.whatsapp.connected ? 'connected' : 'disconnected');
       document.getElementById('waStatusText').textContent = data.whatsapp.connected ? 'וואטסאפ מחובר ✓' : 'וואטסאפ מנותק – סרוק ברקוד';
       document.getElementById('qrCard').style.display = data.whatsapp.connected ? 'none' : 'block';
+      document.getElementById('connectedCard').style.display = data.whatsapp.connected ? 'block' : 'none';
       document.getElementById('sitesList').innerHTML = data.sites.map(s => 
         '<div class="site-item"><span>' + (s.site_name || '-') + '</span><span class="code">' + s.code + '</span><span>' + s.manager_phone + '</span></div>'
       ).join('') || '<p>אין אתרים</p>';
@@ -152,10 +157,19 @@ const adminHtml = `
       if (res.status === 401) return;
       const data = await res.json();
       if (data.connected) return;
+      const el = document.getElementById('qr');
+      if (data.message) {
+        el.innerHTML = '<p style="color:#888;padding:40px">⏳ ' + data.message + '</p>';
+        return;
+      }
       if (data.qr) {
         window.currentQRData = data.qr;
-        const el = document.getElementById('qr');
-        el.innerHTML = '<img src="' + data.qr + '" alt="QR לחיבור וואטסאפ" title="לחץ להגדלה" onclick="openQRFullscreen()">';
+        window.currentQRFormat = data.format || 'svg';
+        if (data.format === 'png') {
+          el.innerHTML = '<img src="' + data.qr + '" alt="QR" title="לחץ להגדלה" onclick="openQRFullscreen()">';
+        } else {
+          el.innerHTML = data.qr;
+        }
       }
     }
     async function addSite() {
@@ -175,11 +189,28 @@ const adminHtml = `
         refreshStatus();
       } else document.getElementById('addResult').textContent = data.error || 'שגיאה';
     }
+    async function forceDisconnect() {
+      try {
+        const res = await fetch(API + '/disconnect', { method: 'POST', headers: getHeaders() });
+        const data = await res.json();
+        if (data.success) {
+          document.getElementById('qr').innerHTML = '<p style="color:#888;padding:40px">⏳ מתחבר מחדש – הברקוד יופיע בעוד כמה שניות</p>';
+          setTimeout(refreshQR, 2000);
+          setTimeout(refreshStatus, 2000);
+        }
+      } catch (e) {}
+    }
     function openQRFullscreen() {
-      const dataUrl = window.currentQRData;
-      if (!dataUrl) return;
+      const qr = window.currentQRData;
+      if (!qr) return;
+      const fmt = window.currentQRFormat || 'svg';
       const w = window.open('', '_blank', 'width=500,height=550');
-      if (w) w.document.write('<html dir="rtl"><head><meta charset="UTF-8"><title>סריקת ברקוד</title></head><body style="margin:0;padding:20px;text-align:center;background:#fff;font-family:Arial"><h3>סרוק עם וואטסאפ</h3><img src="' + dataUrl + '" style="width:400px;height:400px"><p>וואטסאפ - הגדרות - מכשירים מקושרים - קישור מכשיר</p></body></html>');
+      if (!w) return;
+      if (fmt === 'png') {
+        w.document.write('<html dir="rtl"><head><meta charset="UTF-8"><title>סריקת ברקוד</title></head><body style="margin:0;padding:20px;text-align:center;background:#fff"><h3>סרוק עם וואטסאפ</h3><img src="' + qr + '" style="width:400px;height:400px"><p>וואטסאפ - הגדרות - מכשירים מקושרים - קישור מכשיר</p></body></html>');
+      } else {
+        w.document.write('<html dir="rtl"><head><meta charset="UTF-8"><title>סריקת ברקוד</title></head><body style="margin:0;padding:20px;text-align:center;background:#fff"><h3>סרוק עם וואטסאפ</h3><div style="display:inline-block;background:#fff;padding:20px">' + qr + '</div><p>וואטסאפ - הגדרות - מכשירים מקושרים - קישור מכשיר</p></body></html>');
+      }
     }
     (async function init() {
       const t = localStorage.getItem('adminToken');

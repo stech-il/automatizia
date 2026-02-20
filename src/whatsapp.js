@@ -10,6 +10,7 @@ const authPath = path.join(process.env.DATA_DIR || path.join(__dirname, '..', 'd
 
 let sock = null;
 let isConnected = false;
+let connectCallbacks = null;
 const pendingReplies = new Map();
 
 export function getConnectionStatus() {
@@ -17,6 +18,7 @@ export function getConnectionStatus() {
 }
 
 export async function connectWhatsApp(onQR, onReady, onDisconnect) {
+  connectCallbacks = { onQR, onReady, onDisconnect };
   if (!fs.existsSync(authPath)) {
     fs.mkdirSync(authPath, { recursive: true });
   }
@@ -77,6 +79,20 @@ export async function connectWhatsApp(onQR, onReady, onDisconnect) {
   });
 
   return sock;
+}
+
+export async function forceReconnect() {
+  if (sock) {
+    try { sock.end(); } catch (e) {}
+    sock = null;
+  }
+  isConnected = false;
+  if (fs.existsSync(authPath)) {
+    fs.rmSync(authPath, { recursive: true });
+  }
+  if (connectCallbacks) {
+    await connectWhatsApp(connectCallbacks.onQR, connectCallbacks.onReady, connectCallbacks.onDisconnect);
+  }
 }
 
 export async function sendToManager(managerPhone, message, conversationId) {

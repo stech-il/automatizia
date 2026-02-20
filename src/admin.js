@@ -72,20 +72,37 @@ router.post('/sites', requireAuth, (req, res) => {
   res.json({ success: true, site });
 });
 
-// Get QR for WhatsApp (returns PNG data URL - better for scanning)
+// Get QR for WhatsApp (returns SVG or PNG)
 router.get('/qr', requireAuth, async (req, res) => {
   if (whatsapp.getConnectionStatus().connected) {
     return res.json({ connected: true, qr: null });
   }
   if (currentQR) {
     try {
-      const dataUrl = await QRCode.toDataURL(currentQR, { width: 400, margin: 2, color: { dark: '#000', light: '#fff' } });
-      return res.json({ connected: false, qr: dataUrl });
+      const format = req.query.format || 'svg';
+      if (format === 'png') {
+        const dataUrl = await QRCode.toDataURL(currentQR, { width: 400, margin: 2 });
+        return res.json({ connected: false, qr: dataUrl, format: 'png' });
+      }
+      const svg = await QRCode.toString(currentQR, { type: 'svg', width: 350 });
+      return res.json({ connected: false, qr: svg, format: 'svg' });
     } catch (e) {
+      console.error('QR generation error:', e.message);
       return res.json({ connected: false, qr: null });
     }
   }
   res.json({ connected: false, qr: null, message: 'Connecting...' });
+});
+
+// Force disconnect - clears auth and requires new QR scan
+router.post('/disconnect', requireAuth, async (req, res) => {
+  try {
+    setCurrentQR(null);
+    await whatsapp.forceReconnect();
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 export { requireAuth };
