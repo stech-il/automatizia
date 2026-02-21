@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ניהול צ'אט וואטסאפ</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: Segoe UI, Arial; margin: 0; padding: 20px; background: #111; color: #eee; min-height: 100vh; }
+    .container { max-width: 600px; margin: 0 auto; }
+    h1 { color: #25D366; }
+    .card { background: #1a1a1a; border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+    input, button { padding: 12px; font-size: 16px; border-radius: 8px; border: 1px solid #333; }
+    input { width: 100%; margin-bottom: 10px; background: #222; color: #eee; }
+    button { background: #25D366; color: #000; border: none; cursor: pointer; font-weight: bold; }
+    button:hover { opacity: 0.9; }
+    .error { color: #f44; }
+    .success { color: #25D366; }
+    .qr-box { background: #fff; padding: 24px; border-radius: 12px; display: inline-block; margin: 15px 0; text-align: center; border: 3px solid #25D366; }
+    .qr-box h3 { color: #111; margin: 0 0 12px 0; }
+    .qr-box p { color: #666; font-size: 14px; margin: 12px 0 0 0; }
+    #qr { display: block; min-width: 300px; min-height: 300px; }
+    #qr img, #qr svg { display: block; margin: 0 auto; width: 320px; height: 320px; cursor: pointer; }
+    .qr-open { margin-top: 12px; font-size: 13px; color: #25D366; }
+    .site-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #333; }
+    .code { font-family: monospace; background: #333; padding: 4px 8px; border-radius: 4px; }
+    .logout { background: #444; color: #eee; }
+    .status { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-left: 8px; }
+    .status.connected { background: #25D366; }
+    .status.disconnected { background: #f44; }
+  </style>
+</head>
+<body>
+  <div class="container" id="loginForm">
+    <h1>כניסה לניהול</h1>
+    <div class="card">
+      <input type="text" id="username" placeholder="שם משתמש">
+      <input type="password" id="password" placeholder="סיסמה">
+      <button id="loginBtn">התחבר</button>
+      <p class="error" id="loginError"></p>
+    </div>
+  </div>
+  <div class="container" id="dashboard" style="display:none">
+    <h1>ניהול צ'אט וואטסאפ <span class="status" id="waStatus"></span></h1>
+    <p id="waStatusText"></p>
+    <div class="card qr-box" id="qrCard" style="display:none">
+      <h3>סרוק ברקוד לחיבור וואטסאפ</h3>
+      <p>פתח וואטסאפ - הגדרות - מכשירים מקושרים - קישור מכשיר</p>
+      <div id="qr"></div>
+      <p class="qr-open">לחיצה על הברקוד תפתח אותו בחלון חדש לסריקה נוחה יותר</p>
+      <p>הברקוד מתחדש כל כ-20 שניות</p>
+      <button id="disconnectBtn" style="margin-top:12px;background:#666">התנתק וסרוק ברקוד מחדש</button>
+    </div>
+    <div class="card" id="connectedCard" style="display:none">
+      <p>וואטסאפ מחובר. לסריקת ברקוד חדש: <button id="disconnectBtn2" class="logout">התנתק</button></p>
+    </div>
+    <div class="card" id="leadsCard" style="border:1px solid #25D366">
+      <h3>לידים</h3>
+      <p style="font-size:13px;color:#888;margin:-8px 0 10px 0">כל פנייה מהטופס נשמרת בשרת</p>
+      <select id="leadsSiteFilter" style="margin-bottom:10px;padding:8px;background:#222;color:#eee;border:1px solid #333;border-radius:6px;width:100%">
+        <option value="">כל האתרים</option>
+      </select>
+      <div id="leadsList" style="max-height:250px;overflow-y:auto;font-size:14px;min-height:40px"></div>
+      <button id="exportCsvBtn" style="margin-top:10px;background:#25D366;color:#000;font-size:13px">ייצוא ל-CSV</button>
+    </div>
+    <div class="card">
+      <h3>הוסף אתר חדש</h3>
+      <input type="text" id="managerPhone" placeholder="מספר טלפון מנהל (לדוגמה 0501234567)">
+      <input type="text" id="siteName" placeholder="שם האתר (אופציונלי)">
+      <button id="addSiteBtn">הוסף אתר</button>
+      <p id="addResult"></p>
+    </div>
+    <div class="card">
+      <h3>אתרים מחוברים</h3>
+      <div id="sitesList"></div>
+    </div>
+    <button class="logout" id="logoutBtn">התנתק</button>
+  </div>
+  <script>
+    var API = '/admin';
+    var statusInterval, qrInterval, leadsCache = [];
+    function getHeaders() {
+      var t = localStorage.getItem('adminToken');
+      return t ? { 'Authorization': 'Bearer ' + t } : {};
+    }
+    function login() {
+      document.getElementById('loginError').textContent = '';
+      fetch(API + '/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: document.getElementById('username').value, password: document.getElementById('password').value })
+      })
+      .then(function(res) { return res.json(); })
+      .then(function(data) {
+        if (data.success) {
+          localStorage.setItem('adminToken', data.token);
+          loadDashboard();
+        } else {
+          document.getElementById('loginError').textContent = data.error || 'שגיאה';
+        }
+      })
+      .catch(function() { document.getElementById('loginError').textContent = 'שגיאת חיבור'; });
+    }
+    function logout() {
+      fetch(API + '/logout', { method: 'POST', headers: getHeaders() });
+      localStorage.removeItem('adminToken');
+      clearInterval(statusInterval);
+      clearInterval(qrInterval);
+      document.getElementById('loginForm').style.display = 'block';
+      document.getElementById('dashboard').style.display = 'none';
+    }
+    function loadDashboard() {
+      document.getElementById('loginForm').style.display = 'none';
+      document.getElementById('dashboard').style.display = 'block';
+      refreshStatus();
+      refreshQR();
+      statusInterval = setInterval(refreshStatus, 5000);
+      qrInterval = setInterval(refreshQR, 3000);
+    }
+    function refreshStatus() {
+      fetch(API + '/status', { headers: getHeaders() })
+        .then(function(res) {
+          if (res.status === 401) { logout(); return res.json(); }
+          return res.json();
+        })
+        .then(function(data) {
+          if (!data) return;
+          document.getElementById('waStatus').className = 'status ' + (data.whatsapp.connected ? 'connected' : 'disconnected');
+          document.getElementById('waStatusText').textContent = data.whatsapp.connected ? 'וואטסאפ מחובר' : 'וואטסאפ מנותק - סרוק ברקוד';
+          document.getElementById('qrCard').style.display = data.whatsapp.connected ? 'none' : 'block';
+          document.getElementById('connectedCard').style.display = data.whatsapp.connected ? 'block' : 'none';
+          document.getElementById('sitesList').innerHTML = (data.sites || []).map(function(s) {
+            return '<div class="site-item"><span>' + (s.site_name || '-') + '</span><span class="code">' + s.code + '</span><span>' + s.manager_phone + '</span></div>';
+          }).join('') || '<p>אין אתרים</p>';
+          var sel = document.getElementById('leadsSiteFilter');
+          if (sel) {
+            var cur = sel.value;
+            sel.innerHTML = '<option value="">כל האתרים</option>' + (data.sites || []).map(function(s) {
+              return '<option value="' + s.code + '">' + (s.site_name || s.code) + '</option>';
+            }).join('');
+            sel.value = cur || '';
+          }
+          loadLeads();
+        });
+    }
+    function loadLeads() {
+      var sel = document.getElementById('leadsSiteFilter');
+      var site = (sel && sel.value) ? sel.value : '';
+      var url = API + '/leads' + (site ? '?site_code=' + encodeURIComponent(site) : '');
+      fetch(url, { headers: getHeaders() })
+        .then(function(res) { return res.status === 401 ? {} : res.json(); })
+        .then(function(data) {
+          leadsCache = data.leads || [];
+          var el = document.getElementById('leadsList');
+          if (!el) return;
+          if (leadsCache.length === 0) {
+            el.innerHTML = '<p style="color:#888">אין לידים עדיין</p>';
+          } else {
+            el.innerHTML = leadsCache.map(function(l) {
+              return '<div class="site-item" style="border-bottom:1px solid #333;padding:10px 0">' +
+                '<span><strong>' + (l.visitor_name || '-') + '</strong> | ' + (l.visitor_phone || '-') + ' | ' + (l.site_name || l.site_code) + '</span>' +
+                '<span style="color:#aaa;font-size:12px;display:block">' + (l.message || '') + '</span>' +
+                '<span style="color:#666;font-size:11px">' + (l.created_at || '') + '</span></div>';
+            }).join('');
+          }
+        });
+    }
+    function exportLeadsCsv() {
+      if (leadsCache.length === 0) { alert('אין לידים לייצוא'); return; }
+      var headers = ['שם','טלפון','הודעה','אתר','תאריך'];
+      var rows = leadsCache.map(function(l) {
+        var vn = (l.visitor_name || '').replace(/"/g, '""');
+        var vp = (l.visitor_phone || '').replace(/"/g, '""');
+        var msg = (l.message || '').replace(/"/g, '""');
+        var site = (l.site_name || l.site_code || '').replace(/"/g, '""');
+        var date = l.created_at || '';
+        return '"' + vn + '","' + vp + '","' + msg + '","' + site + '","' + date + '"';
+      });
+      var csv = String.fromCharCode(0xFEFF) + headers.map(function(h){ return '"'+h+'"'; }).join(',') + '\n' + rows.join('\n');
+      var a = document.createElement('a');
+      a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
+      a.download = 'leads_' + new Date().toISOString().slice(0,10) + '.csv';
+      a.click();
+    }
+    function refreshQR() {
+      fetch(API + '/qr', { headers: getHeaders() })
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+          if (data.connected) return;
+          var el = document.getElementById('qr');
+          if (!el) return;
+          if (data.message) {
+            el.innerHTML = '<p style="color:#888;padding:40px">' + data.message + '</p>';
+            return;
+          }
+          if (data.qr) {
+            window.currentQRData = data.qr;
+            window.currentQRFormat = data.format || 'svg';
+            el.innerHTML = data.format === 'png' ? '<img src="' + data.qr + '" alt="QR">' : data.qr;
+          }
+        });
+    }
+    function addSite() {
+      var phone = document.getElementById('managerPhone').value.trim();
+      var name = document.getElementById('siteName').value.trim();
+      if (!phone) { document.getElementById('addResult').textContent = 'הזן מספר טלפון'; return; }
+      fetch(API + '/sites', {
+        method: 'POST',
+        headers: Object.assign({ 'Content-Type': 'application/json' }, getHeaders()),
+        body: JSON.stringify({ manager_phone: phone, site_name: name })
+      })
+      .then(function(res) { return res.json(); })
+      .then(function(data) {
+        if (data.success) {
+          document.getElementById('addResult').innerHTML = '<span class="success">נוסף! קוד: ' + data.site.code + '</span>';
+          document.getElementById('managerPhone').value = '';
+          document.getElementById('siteName').value = '';
+          refreshStatus();
+        } else {
+          document.getElementById('addResult').textContent = data.error || 'שגיאה';
+        }
+      });
+    }
+    function forceDisconnect() {
+      fetch(API + '/disconnect', { method: 'POST', headers: getHeaders() })
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+          if (data.success) {
+            document.getElementById('qr').innerHTML = '<p style="color:#888;padding:40px">מתחבר מחדש...</p>';
+            setTimeout(refreshQR, 2000);
+            setTimeout(refreshStatus, 2000);
+          }
+        });
+    }
+    document.getElementById('loginBtn').addEventListener('click', login);
+    document.getElementById('logoutBtn').addEventListener('click', logout);
+    document.getElementById('addSiteBtn').addEventListener('click', addSite);
+    document.getElementById('exportCsvBtn').addEventListener('click', exportLeadsCsv);
+    document.getElementById('disconnectBtn').addEventListener('click', forceDisconnect);
+    document.getElementById('disconnectBtn2').addEventListener('click', forceDisconnect);
+    document.getElementById('leadsSiteFilter').addEventListener('change', loadLeads);
+    (function init() {
+      var t = localStorage.getItem('adminToken');
+      if (!t) return;
+      fetch(API + '/status', { headers: { 'Authorization': 'Bearer ' + t } })
+        .then(function(res) {
+          if (res.status === 200) loadDashboard();
+        });
+    })();
+  </script>
+</body>
+</html>
